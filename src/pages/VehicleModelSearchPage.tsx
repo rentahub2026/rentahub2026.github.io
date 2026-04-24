@@ -1,24 +1,36 @@
+import ArrowBack from '@mui/icons-material/ArrowBack'
 import FilterAlt from '@mui/icons-material/FilterAlt'
-import { Badge, Box, Container, Fab, Grid, Pagination, Paper, Stack, Typography, useMediaQuery, useTheme } from '@mui/material'
+import {
+  Badge,
+  Box,
+  Button,
+  Container,
+  Fab,
+  Grid,
+  Pagination,
+  Paper,
+  Stack,
+  Typography,
+  useMediaQuery,
+  useTheme,
+} from '@mui/material'
 import dayjs from 'dayjs'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link as RouterLink, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { DEFAULT_SEARCH_LOCATION } from '../constants/geo'
-import CarCard from '../components/common/CarCard'
 import BrowseCarSearch from '../components/browse/BrowseCarSearch'
+import CarCard from '../components/common/CarCard'
 import EmptyState from '../components/common/EmptyState'
 import CarGridSkeleton from '../components/skeletons/CarGridSkeleton'
 import FilterDrawer from '../components/search/FilterDrawer'
 import FilterPanel from '../components/search/FilterPanel'
 import SortBar from '../components/search/SortBar'
-import VehicleTypeFilterChips from '../components/search/VehicleTypeFilterChips'
 import { useListingSearch } from '../hooks/useListingSearch'
 import { useVehicles } from '../hooks/useVehicles'
 import { useSearchStore } from '../store/useSearchStore'
-import type { SearchFilters } from '../types'
+import type { SearchFilters, VehicleType } from '../types'
 import { containerGutters, softInteractiveSurface, stickyToolbarPaper } from '../theme/pageStyles'
-import { vehicleModelSearchPath } from '../utils/vehicleBrowsePaths'
 import { isValidVehicleType } from '../utils/vehicleUtils'
 
 const PAGE_SIZE = 6
@@ -33,12 +45,24 @@ const defaultFilters: SearchFilters = {
   availableOnly: true,
 }
 
-export default function SearchPage() {
+export default function VehicleModelSearchPage() {
   const theme = useTheme()
   const isMd = useMediaQuery(theme.breakpoints.down('md'))
   const isSmDown = useMediaQuery(theme.breakpoints.down('sm'))
   const navigate = useNavigate()
   const routeLocation = useLocation()
+  const [searchParams] = useSearchParams()
+
+  const make = (searchParams.get('make') ?? '').trim()
+  const model = (searchParams.get('model') ?? '').trim()
+  const vtRaw = searchParams.get('vt') ?? ''
+
+  /** Stable reference — inline objects were new every render and retriggered search in an infinite loop. */
+  const modelKey = useMemo(() => {
+    if (!make || !model || !isValidVehicleType(vtRaw)) return null
+    return { make, model, vehicleType: vtRaw as VehicleType }
+  }, [make, model, vtRaw])
+
   const { isLoading: vehiclesLoading, isError: vehiclesFatalError, error: vehiclesError, refetch: refetchVehicles } =
     useVehicles()
   const {
@@ -47,12 +71,9 @@ export default function SearchPage() {
     error: searchError,
     refetch: refetchSearch,
     availabilityApplied,
-  } = useListingSearch()
-  const [, setSearchParams] = useSearchParams()
+  } = useListingSearch({ modelKey, enabled: modelKey != null })
 
   const location = useSearchStore((s) => s.location)
-  const pickup = useSearchStore((s) => s.pickup)
-  const dropoff = useSearchStore((s) => s.dropoff)
   const filters = useSearchStore((s) => s.filters)
   const sortBy = useSearchStore((s) => s.sortBy)
   const viewMode = useSearchStore((s) => s.viewMode)
@@ -66,10 +87,10 @@ export default function SearchPage() {
   const [page, setPage] = useState(1)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const searchToolbarRef = useRef<HTMLDivElement | null>(null)
-  /** Measured height of the sticky search strip — drives filter sidebar & mobile secondary sticky offset. */
   const [searchToolbarH, setSearchToolbarH] = useState(108)
 
   const appBarOffsetPx = isMd ? 56 : 64
+  const belowSearchStickyTop = appBarOffsetPx + searchToolbarH
 
   useLayoutEffect(() => {
     const el = searchToolbarRef.current
@@ -81,32 +102,15 @@ export default function SearchPage() {
     return () => ro.disconnect()
   }, [])
 
-  const belowSearchStickyTop = appBarOffsetPx + searchToolbarH
-
   useEffect(() => {
     const q = new URLSearchParams(routeLocation.search)
     const loc = q.get('location')
     const pu = q.get('pickup')
     const dr = q.get('dropoff')
-    const types = q.get('types')
-    const vt = q.get('vt')
     if (loc) setLocation(loc)
     if (pu && dr) setDates(dayjs(pu), dayjs(dr))
     else if (pu) setDates(dayjs(pu), dayjs(pu).add(3, 'day'))
-    if (types) setFilter({ types: types.split(',').filter(Boolean) })
-    if (vt && isValidVehicleType(vt)) setFilter({ vehicleType: vt })
-    else setFilter({ vehicleType: 'all' })
-  }, [routeLocation.search, setLocation, setDates, setFilter])
-
-  useEffect(() => {
-    const params = new URLSearchParams()
-    params.set('location', location)
-    if (pickup?.isValid()) params.set('pickup', pickup.format('YYYY-MM-DD'))
-    if (dropoff?.isValid()) params.set('dropoff', dropoff.format('YYYY-MM-DD'))
-    if (filters.types.length) params.set('types', filters.types.join(','))
-    if (filters.vehicleType !== 'all') params.set('vt', filters.vehicleType)
-    setSearchParams(params, { replace: true })
-  }, [location, pickup, dropoff, filters.types, filters.vehicleType, setSearchParams])
+  }, [routeLocation.search, setLocation, setDates])
 
   const totalCount = hits.length
   const effectiveViewMode = isSmDown ? 'list' : viewMode
@@ -118,7 +122,7 @@ export default function SearchPage() {
 
   useEffect(() => {
     setPage(1)
-  }, [filters, sortBy, location])
+  }, [filters, sortBy, location, make, model, vtRaw])
 
   const hasActiveFilters = useMemo(() => {
     return (
@@ -138,21 +142,41 @@ export default function SearchPage() {
     setLocation(DEFAULT_SEARCH_LOCATION)
   }
 
+  if (!modelKey) {
+    return <Navigate to="/search" replace />
+  }
+
+  const displayModel = `${make} ${model}`
+
   return (
     <Box sx={{ bgcolor: 'background.default', minHeight: '100vh', pb: { xs: 8, md: 6 } }}>
       <Paper ref={searchToolbarRef} elevation={0} sx={stickyToolbarPaper(theme)}>
-        <Container
-          maxWidth="lg"
-          sx={{
-            py: { xs: 1.5, md: 2 },
-            ...containerGutters,
-          }}
-        >
-          <BrowseCarSearch />
+        <Container maxWidth="lg" sx={{ py: { xs: 1.5, md: 2 }, ...containerGutters }}>
+          <Stack spacing={1.5}>
+            <Button
+              component={RouterLink}
+              to="/search"
+              startIcon={<ArrowBack />}
+              size="small"
+              sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
+            >
+              All vehicles
+            </Button>
+            <BrowseCarSearch />
+          </Stack>
         </Container>
       </Paper>
 
       <Container maxWidth="lg" sx={{ mt: { xs: 2, md: 3 }, pb: { xs: 10, md: 6 }, ...containerGutters }}>
+        <Stack spacing={1} sx={{ mb: 2 }}>
+          <Typography variant="h5" fontWeight={800} component="h1">
+            {displayModel}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Compare listings from different hosts. Pick dates and an area to check live availability.
+          </Typography>
+        </Stack>
+
         <Grid container spacing={{ xs: 2.5, md: 3 }}>
           {!isMd && (
             <Grid item xs={12} md={3}>
@@ -195,8 +219,6 @@ export default function SearchPage() {
               showViewModeToggle={!isSmDown}
             />
 
-            <VehicleTypeFilterChips value={filters.vehicleType} onChange={(vehicleType) => setFilter({ vehicleType })} />
-
             {vehiclesLoading || searchLoading ? (
               <CarGridSkeleton count={PAGE_SIZE} layout={effectiveViewMode} />
             ) : vehiclesFatalError && vehiclesError ? (
@@ -215,13 +237,11 @@ export default function SearchPage() {
               />
             ) : pageItems.length === 0 ? (
               <EmptyState
-                title={
-                  availabilityApplied ? 'Nothing available for those dates' : 'No vehicles match your filters'
-                }
+                title={availabilityApplied ? 'Nothing available for those dates' : 'No matching host listings'}
                 description={
                   availabilityApplied
-                    ? 'Try different pickup and return dates, another area, or clear filters to see more options.'
-                    : 'Try changing vehicle type, widening your price range, or clearing filters.'
+                    ? 'Adjust your trip dates or try a nearby area to see more options for this model.'
+                    : 'Widen your filters or clear them to see every host offering this vehicle.'
                 }
                 actionLabel="Clear filters"
                 onAction={handleClear}
@@ -243,7 +263,7 @@ export default function SearchPage() {
                           layout={effectiveViewMode}
                           showDateAvailabilityHint={availabilityApplied && hit.availability.availableForRange}
                           distanceKm={hit.distanceKm}
-                          onNavigate={(c) => navigate(vehicleModelSearchPath(c))}
+                          onNavigate={(c) => navigate(`/cars/${c.id}`)}
                           onReserve={(c) => navigate(`/cars/${c.id}`)}
                         />
                       </Box>
